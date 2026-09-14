@@ -1,10 +1,51 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { TableService } from "@/lib/services/tableService";
-import { OrderService } from "@/lib/services/orderService";
-import { WaiterService } from "@/lib/services/waiterService";
+import { isSupabaseEnabled, getSupabaseService, getSupabaseAnon } from "@/lib/supabase/server";
 
 export async function GET() {
+  // Try Supabase first
+  if (isSupabaseEnabled()) {
+    try {
+      const supabase = getSupabaseService() || getSupabaseAnon();
+      if (supabase) {
+        const { data: tables } = await supabase.from('tables').select('*').eq('is_active', true);
+        const { data: orders } = await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(20);
+        const { data: waiter } = await supabase.from('waiter_requests').select('*').eq('status', 'OPEN');
+        const { data: bills } = await supabase.from('bills').select('*').eq('status', 'COMPLETED');
+        
+        const activeTables = (tables || []).filter((t:any)=>t.status==="OCCUPIED").length;
+        const availableTables = (tables || []).filter((t:any)=>t.status==="AVAILABLE").length;
+        const newOrders = (orders || []).filter((o:any)=>o.status==="NEW").length;
+        const preparing = (orders || []).filter((o:any)=>o.status==="PREPARING").length;
+        const ready = (orders || []).filter((o:any)=>o.status==="READY").length;
+        const waiterOpen = (waiter || []).length;
+        const revenue = (bills || []).reduce((s:any,b:any)=>s+parseFloat(b.grand_total),0);
+
+        const recentOrders = await Promise.all((orders || []).slice(0,10).map(async (o:any)=>{
+          const { data: table } = await supabase.from('tables').select('name').eq('id', o.table_id).single();
+          const { data: items } = await supabase.from('order_items').select('id').eq('order_id', o.id);
+          return { id: o.id, order_number: o.order_number, table_name: table?.name, status: o.status, total_amount: o.total_amount, items_count: items?.length || 0, created_at: o.created_at };
+        }));
+
+        const tablesWithQr = await Promise.all((tables || []).map(async (t:any)=>{
+          const { data: qr } = await supabase.from('qr_tokens').select('*').eq('table_id', t.id).eq('is_active', true).single();
+          return { table: t, qr, session: null };
+        }));
+
+        return NextResponse.json({
+          stats: { activeTables, availableTables, billPending: 0, newOrders, preparing, ready, waiterOpen, revenue, totalOrders: orders?.length || 0 },
+          recentOrders,
+          tables: tablesWithQr,
+        });
+      }
+    } catch (e) {
+      console.error("Supabase stats error:", e);
+    }
+  }
+
+  // In-memory fallback
+  const { TableService } = await import("@/lib/services/tableService");
+  const { WaiterService } = await import("@/lib/services/waiterService");
   const db = getDb();
   const tables = TableService.getAllWithQr();
   const activeTables = tables.filter(t=>t.table.status==="OCCUPIED").length;

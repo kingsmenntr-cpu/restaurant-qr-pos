@@ -5,9 +5,9 @@ import type {
   PaymentSettings, TaxSettings, RestaurantSettings
 } from "./types";
 import { generateSecureToken, hashToken, generateOrderNumber, generateBillNumber } from "./utils";
+import { getSupabaseService, getSupabaseAnon, isSupabaseEnabled } from "./supabase/server";
 
-// In-memory DB singleton (for V1 demo, production would use Supabase/Postgres)
-// This survives HMR via globalThis
+// In-memory DB type
 type DB = {
   restaurants: Restaurant[];
   branches: Branch[];
@@ -50,33 +50,9 @@ function createSeedData(): DB {
     is_active: true,
   };
   const users: User[] = [
-    {
-      id: "u-owner-1",
-      restaurant_id: restaurantId,
-      branch_id: branchId,
-      role: "OWNER",
-      name: "Owner",
-      email: "owner@restaurant.com",
-      is_active: true,
-    },
-    {
-      id: "u-cashier-1",
-      restaurant_id: restaurantId,
-      branch_id: branchId,
-      role: "CASHIER",
-      name: "Cashier",
-      email: "cashier@restaurant.com",
-      is_active: true,
-    },
-    {
-      id: "u-kitchen-1",
-      restaurant_id: restaurantId,
-      branch_id: branchId,
-      role: "KITCHEN",
-      name: "Kitchen",
-      email: "kitchen@restaurant.com",
-      is_active: true,
-    },
+    { id: "u-owner-1", restaurant_id: restaurantId, branch_id: branchId, role: "OWNER", name: "Owner", email: "owner@restaurant.com", is_active: true },
+    { id: "u-cashier-1", restaurant_id: restaurantId, branch_id: branchId, role: "CASHIER", name: "Cashier", email: "cashier@restaurant.com", is_active: true },
+    { id: "u-kitchen-1", restaurant_id: restaurantId, branch_id: branchId, role: "KITCHEN", name: "Kitchen", email: "kitchen@restaurant.com", is_active: true },
   ];
 
   const tables: Table[] = Array.from({ length: 12 }).map((_, i) => {
@@ -95,7 +71,7 @@ function createSeedData(): DB {
     };
   });
 
-  const qr_tokens: QrToken[] = tables.map((t, idx) => {
+  const qr_tokens: QrToken[] = tables.map((t) => {
     const token = `table-token-${t.id.slice(0, 8)}-${generateSecureToken().slice(0, 24)}`;
     return {
       id: uuidv4(),
@@ -187,7 +163,21 @@ export function resetDb() {
   globalForDb.__RESTAURANT_DB__ = createSeedData();
 }
 
-// Helpers
+// Supabase helpers
+async function supabaseFindTableByToken(token: string) {
+  if (!isSupabaseEnabled()) return null;
+  try {
+    const supabase = getSupabaseService() || getSupabaseAnon();
+    if (!supabase) return null;
+    const { data: qr, error } = await supabase.from('qr_tokens').select('*').eq('token', token).eq('is_active', true).single();
+    if (error || !qr) return null;
+    const { data: table } = await supabase.from('tables').select('*').eq('id', qr.table_id).single();
+    if (!table) return null;
+    return { table, qr };
+  } catch { return null; }
+}
+
+// Helpers - now support both in-memory and Supabase
 export function findTableByToken(token: string) {
   const db = getDb();
   const qr = db.qr_tokens.find(q => q.token === token && q.is_active);
@@ -195,6 +185,15 @@ export function findTableByToken(token: string) {
   const table = db.tables.find(t => t.id === qr.table_id);
   if (!table) return null;
   return { table, qr };
+}
+
+export async function findTableByTokenAsync(token: string) {
+  // Try Supabase first if enabled, else in-memory
+  if (isSupabaseEnabled()) {
+    const sb = await supabaseFindTableByToken(token);
+    if (sb) return sb;
+  }
+  return findTableByToken(token);
 }
 
 export function getActiveSessionForTable(tableId: string) {
@@ -208,13 +207,12 @@ export function getActiveSessionById(sessionId: string) {
 }
 
 export function emitEvent(type: string, payload: any) {
-  // For realtime: store notification and broadcast via global event
   const db = getDb();
   const now = new Date().toISOString();
   const notif: Notification = {
     id: uuidv4(),
-    restaurant_id: payload.restaurant_id || db.restaurants[0].id,
-    branch_id: payload.branch_id || db.branches[0].id,
+    restaurant_id: payload.restaurant_id || db.restaurants[0]?.id || '11111111-1111-1111-1111-111111111111',
+    branch_id: payload.branch_id || db.branches[0]?.id || '22222222-2222-2222-2222-222222222222',
     type,
     entity_type: payload.entity_type || "order",
     entity_id: payload.entity_id || uuidv4(),
@@ -224,10 +222,27 @@ export function emitEvent(type: string, payload: any) {
     created_at: now,
   };
   db.notifications.unshift(notif);
-  // Keep only 100
   if (db.notifications.length > 100) db.notifications.pop();
 
-  // Broadcast via globalThis event emitter
+  // Try Supabase Realtime emit
+  if (isSupabaseEnabled()) {
+    try {
+      const supabase = getSupabaseService() || getSupabaseAnon();
+      if (supabase) {
+        (supabase.from('notifications').insert({
+          restaurant_id: notif.restaurant_id,
+          branch_id: notif.branch_id,
+          type,
+          entity_type: notif.entity_type,
+          entity_id: notif.entity_id,
+          table_id: notif.table_id,
+          recipient_role: notif.recipient_role,
+          status: 'UNREAD'
+        }) as any).then(()=>{}).catch(()=>{});
+      }
+    } catch {}
+  }
+
   const g = globalThis as any;
   if (!g.__EVENT_LISTENERS__) g.__EVENT_LISTENERS__ = [];
   g.__EVENT_LISTENERS__.forEach((cb: any) => {
@@ -243,3 +258,6 @@ export function subscribeToEvents(callback: (e: any) => void) {
     g.__EVENT_LISTENERS__ = g.__EVENT_LISTENERS__.filter((c: any) => c !== callback);
   };
 }
+
+// Export seed for Supabase setup
+export { createSeedData };

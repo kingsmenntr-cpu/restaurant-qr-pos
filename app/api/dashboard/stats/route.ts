@@ -9,12 +9,15 @@ export async function GET() {
       const supabase = getSupabaseService() || getSupabaseAnon();
       if (supabase) {
         const { data: tables } = await supabase.from('tables').select('*').eq('is_active', true);
-        const { data: orders } = await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(20);
+        const { data: orders } = await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(50);
         const { data: waiter } = await supabase.from('waiter_requests').select('*').eq('status', 'OPEN');
         const { data: bills } = await supabase.from('bills').select('*').eq('status', 'COMPLETED');
+        const { data: activeSessions } = await supabase.from('table_sessions').select('*').eq('status', 'ACTIVE');
         
-        const activeTables = (tables || []).filter((t:any)=>t.status==="OCCUPIED").length;
-        const availableTables = (tables || []).filter((t:any)=>t.status==="AVAILABLE").length;
+        // Active tables = tables with ACTIVE session OR status OCCUPIED
+        const activeSessionTableIds = new Set((activeSessions || []).map((s:any)=>s.table_id));
+        const activeTables = (tables || []).filter((t:any)=> t.status==="OCCUPIED" || activeSessionTableIds.has(t.id)).length;
+        const availableTables = (tables || []).filter((t:any)=> t.status==="AVAILABLE" && !activeSessionTableIds.has(t.id)).length;
         const newOrders = (orders || []).filter((o:any)=>o.status==="NEW").length;
         const preparing = (orders || []).filter((o:any)=>o.status==="PREPARING").length;
         const ready = (orders || []).filter((o:any)=>o.status==="READY").length;
@@ -29,11 +32,14 @@ export async function GET() {
 
         const tablesWithQr = await Promise.all((tables || []).map(async (t:any)=>{
           const { data: qr } = await supabase.from('qr_tokens').select('*').eq('table_id', t.id).eq('is_active', true).single();
-          return { table: t, qr, session: null };
+          // Determine real status based on active session
+          let realStatus = t.status;
+          if (activeSessionTableIds.has(t.id) && t.status==="AVAILABLE") realStatus = "OCCUPIED";
+          return { table: { ...t, status: realStatus }, qr, session: null };
         }));
 
         return NextResponse.json({
-          stats: { activeTables, availableTables, billPending: 0, newOrders, preparing, ready, waiterOpen, revenue, totalOrders: orders?.length || 0 },
+          stats: { activeTables, availableTables, billPending: (tables || []).filter((t:any)=>t.status==="BILL_PENDING").length, newOrders, preparing, ready, waiterOpen, revenue, totalOrders: orders?.length || 0 },
           recentOrders,
           tables: tablesWithQr,
         });

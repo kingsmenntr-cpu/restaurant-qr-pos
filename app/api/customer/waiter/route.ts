@@ -7,7 +7,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const parsed = waiterRequestSchema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: { message: parsed.error.errors[0].message } }, { status: 400 });
-    const result = WaiterService.createRequest(parsed.data.token);
+    const result = await WaiterService.createRequest(parsed.data.token);
     return NextResponse.json(result, { status: 201 });
   } catch (e: any) {
     return NextResponse.json({ error: { code: e.code, message: e.message } }, { status: e.status || 500 });

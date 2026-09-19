@@ -10,7 +10,7 @@ export default function Home() {
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-5xl">
         <div className="text-center mb-12">
           <motion.h1 initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="text-5xl md:text-7xl font-black tracking-tight">
-            <span className="bg-gradient-to-br from-white to-white/60 bg-clip-text text-transparent">Agra Foods</span>
+            <span className="bg-gradient-to-br from-white to-white/60 bg-clip-text text-transparent">Agra Foods Ansari</span>
             <span className="block text-2xl md:text-3xl font-light mt-2 text-white/60">Royal Taste • QR POS</span>
           </motion.h1>
           <p className="mt-6 text-white/50 max-w-2xl mx-auto text-lg">Scan • Order • Track • Pay — Real-time restaurant operating system with glassmorphism design, 58mm thermal printing & dynamic UPI QR</p>
